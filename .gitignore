@@ -1,0 +1,11 @@
+node_modules/
+sessions/*.json
+sessions/*.db
+sessions/*.db-shm
+sessions/*.db-wal
+!sessions/.gitkeep
+trajectories/
+uploads/
+.env
+.DS_Store
+*.log

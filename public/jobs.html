@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ares — Jobs</title>
+  <!-- Phase 7a — animation token system (ease curves, durations, reduced-motion). -->
+  <link rel="stylesheet" href="/lib/anim.css">
+  <style>
+    :root {
+      --bg: #0a0a0b; --panel: #16161a; --panel2: #1c1c21; --raised: #23232a;
+      --border: #2c2c34; --border2: #3a3a42; --muted: #72727d; --text: #d4d4dc;
+      --text-bright: #f4f4f8; --accent: #cb7c58; --accent-soft: #e2a27f;
+      --ok: #56c79f; --warn: #f5b84c; --err: #f7768e;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }
+    a { color: var(--accent-soft); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header { display:flex; align-items:center; gap:16px; padding:14px 22px; border-bottom:1px solid var(--border); background:var(--panel); position:sticky; top:0; }
+    header h1 { margin:0; font-size:18px; font-weight:600; color:var(--text-bright); }
+    header .nav { margin-left:auto; display:flex; gap:14px; }
+    header .nav a { font-size:13px; color:var(--text); }
+    main { max-width:1200px; margin:0 auto; padding:22px; }
+    section { margin-bottom:28px; }
+    h2 { font-size:14px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); font-weight:600; margin:0 0 10px; }
+    .grid { display:grid; grid-template-columns:1fr; gap:12px; }
+    @media (min-width:880px) { .grid { grid-template-columns:1fr 1fr; } }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:16px; }
+    .card.disabled { opacity: 0.55; }
+    .card-head { display:flex; align-items:flex-start; gap:12px; }
+    .card-head .title { font-size:15px; font-weight:600; color:var(--text-bright); margin:0; flex:1; }
+    .badge { font-size:11px; padding:2px 7px; border-radius:10px; border:1px solid var(--border2); color:var(--muted); }
+    .badge.ok { color:var(--ok); border-color:#26573f; }
+    .badge.failed { color:var(--err); border-color:#5e2030; }
+    .badge.running { color:var(--warn); border-color:#5e4720; }
+    .desc { color:var(--muted); font-size:13px; margin:8px 0 14px; line-height:1.5; }
+    .meta { display:flex; gap:14px; font-size:12px; color:var(--muted); flex-wrap:wrap; margin-bottom:12px; }
+    .meta code { background:var(--panel2); padding:2px 6px; border-radius:4px; color:var(--text); }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    button { font-size:12.5px; background:var(--panel2); border:1px solid var(--border2); color:var(--text); padding:6px 12px; border-radius:6px; cursor:pointer; transition:all 0.12s; }
+    button:hover { background:var(--raised); color:var(--text-bright); }
+    button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+    button.primary:hover { background:var(--accent-soft); }
+    button[disabled] { opacity:0.5; cursor:not-allowed; }
+    .toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px; }
+    .toggle input { accent-color: var(--accent); }
+    table { width:100%; border-collapse:collapse; font-size:12.5px; margin-top:12px; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+    th { color:var(--muted); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:0.03em; }
+    td.mono, code { font-family:"SF Mono",Menlo,monospace; font-size:11.5px; }
+    .verdict { font-size:11px; padding:1px 6px; border-radius:4px; }
+    .verdict.auto_committed { color:var(--ok); background:rgba(86,199,159,0.1); }
+    .verdict.draft_for_user { color:var(--warn); background:rgba(245,184,76,0.1); }
+    .verdict.held_for_review { color:var(--accent-soft); background:rgba(203,124,88,0.12); }
+    .verdict.blocked { color:var(--err); background:rgba(247,118,142,0.1); }
+    .verdict.errored { color:var(--err); background:rgba(247,118,142,0.15); border:1px solid var(--err); }
+    pre { background:var(--panel2); padding:10px 12px; border-radius:6px; overflow:auto; font-size:11.5px; max-height:300px; }
+    .empty { color:var(--muted); font-style:italic; padding:20px 0; }
+    input[type=text] { background:var(--panel2); border:1px solid var(--border2); color:var(--text); padding:5px 8px; border-radius:4px; font-family:inherit; font-size:12px; }
+    .toast { position:fixed; bottom:20px; right:20px; padding:10px 16px; background:var(--raised); border:1px solid var(--border2); border-radius:6px; font-size:13px; opacity:0; transform:translateY(8px); transition:all 0.2s; pointer-events:none; }
+    .toast.show { opacity:1; transform:none; }
+    details { margin-top:10px; }
+    details summary { cursor:pointer; color:var(--muted); font-size:12px; padding:4px 0; }
+    details summary:hover { color:var(--text); }
+    .policy-table td:first-child { color:var(--muted); width:40%; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Ares · Jobs</h1>
+    <nav class="nav">
+      <a href="/">Chat</a>
+      <a href="/jobs.html">Jobs</a>
+    </nav>
+  </header>
+  <main>
+    <section>
+      <h2 style="display:flex;align-items:center;gap:14px;">
+        Scheduled jobs
+        <button id="newJobBtn" class="primary" style="font-size:12px;padding:4px 10px;">+ New agent job</button>
+      </h2>
+      <div id="newJobForm" class="card" style="display:none;margin-bottom:14px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <label>Title<input type="text" id="njTitle" style="width:100%"/></label>
+          <label>Cron (5 fields)<input type="text" id="njCron" placeholder="*/30 * * * *" style="width:100%"/></label>
+          <label>Model<select id="njModel" style="width:100%"><option value="haiku">haiku</option><option value="sonnet" selected>sonnet</option><option value="opus">opus</option></select></label>
+          <label>Delivery<select id="njDeliver" style="width:100%"><option value="browser-toast">browser-toast</option><option value="chat-mcp">chat-mcp (draft)</option><option value="email-mcp">email-mcp (draft)</option></select></label>
+          <label style="grid-column:1/-1">Delivery target<input type="text" id="njDelTarget" placeholder="(slack channel id or 'Folder|conversationId')" style="width:100%"/></label>
+          <label style="grid-column:1/-1">MCP allowlist (comma-separated)<input type="text" id="njMcps" placeholder="data-query-mcp, email-mcp" style="width:100%"/></label>
+          <label style="grid-column:1/-1">Prompt<textarea id="njPrompt" rows="4" style="width:100%;font-family:ui-monospace,Menlo,monospace;"></textarea></label>
+          <label style="grid-column:1/-1"><input type="checkbox" id="njAttachSkills" checked/> Force skill_search step at start</label>
+        </div>
+        <div class="row" style="margin-top:10px;gap:8px;">
+          <button class="primary" id="njSave">Save job</button>
+          <button id="njCancel">Cancel</button>
+        </div>
+      </div>
+      <div id="jobs" class="grid"></div>
+    </section>
+
+    <section>
+      <h2>Recent actions (last 7 days)</h2>
+      <div class="card">
+        <table id="actions">
+          <thead><tr><th>Time</th><th>Job</th><th>Action</th><th>Target</th><th>Verdict</th><th>Summary</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Auto-action policy</h2>
+      <div class="card">
+        <table class="policy-table" id="policy"></table>
+        <p class="desc" style="margin-top:14px">
+          Vendor-facing email send is policy-blocked — every reply is saved as an Outlook draft with full thread quoted.
+          Slack stays in SAFE_MODE.
+          SIM auto-comment / auto-resolve / auto-create are allowed when confidence ≥ threshold and the CTI is on the allowlist.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+<!-- F-12: DOMPurify for the openRun() pop-up. Same CDN as index.html. -->
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+<script>
+// Phase 3 — server templates __ARES_TOKEN__; wrap fetch so /api/* always
+// carries Authorization: Bearer <token>.
+window.__ARES_TOKEN__ = "__ARES_TOKEN__";
+(function () {
+  const realFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    let url = typeof input === "string" ? input : (input && input.url) || "";
+    const isApi = url.startsWith("/api/") || url.startsWith(`${location.origin}/api/`);
+    if (!isApi) return realFetch(input, init);
+    const opts = init ? { ...init } : {};
+    const headers = new Headers(opts.headers || (typeof input !== "string" && input.headers) || {});
+    if (!headers.has("Authorization")) {
+      headers.set("Authorization", "Bearer " + window.__ARES_TOKEN__);
+    }
+    opts.headers = headers;
+    return realFetch(input, opts);
+  };
+})();
+
+const $ = (s, r=document) => r.querySelector(s);
+const toast = (msg) => { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 1800); };
+const fmt = (ms) => ms ? new Date(ms).toLocaleString() : "—";
+const escape = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+async function api(method, path, body) {
+  const r = await fetch(path, {
+    method, headers: body ? {"Content-Type":"application/json"} : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  return r.json();
+}
+
+async function loadJobs() {
+  const jobs = await api("GET", "/api/jobs");
+  const html = jobs.map((j) => {
+    const last = j.lastRun;
+    const lastBadge = !last ? `<span class="badge">never run</span>`
+      : last.status === "completed" ? `<span class="badge ok">${escape(last.status)}</span>`
+      : last.status === "running" ? `<span class="badge running">${escape(last.status)}</span>`
+      : `<span class="badge failed">${escape(last.status)}</span>`;
+    return `
+      <div class="card ${j.enabled ? "" : "disabled"}" data-id="${escape(j.id)}">
+        <div class="card-head">
+          <div class="title">${escape(j.title)}</div>
+          ${lastBadge}
+        </div>
+        <p class="desc">${escape(j.description)}</p>
+        <div class="meta">
+          <span><b>Schedule:</b> <code>${escape(j.cron)}</code></span>
+          <span><b>Model:</b> ${escape(j.model)}</span>
+          <span><b>Last run:</b> ${last ? fmt(last.startedAt) : "never"}</span>
+        </div>
+        ${last?.summary ? `<div class="desc"><b>Last result:</b> ${escape(last.summary)}</div>` : ""}
+        <div class="row">
+          <button class="primary" data-act="run">Run now</button>
+          <label class="toggle"><input type="checkbox" data-act="enable" ${j.enabled ? "checked" : ""}/> Enabled</label>
+          <input type="text" data-act="cron" value="${escape(j.cron)}" style="width:170px" title="cron expression"/>
+          <button data-act="save-cron">Save schedule</button>
+          <button data-act="view-runs">Runs ↗</button>
+        </div>
+        <div class="run-detail" data-region="runs"></div>
+      </div>`;
+  }).join("");
+  $("#jobs").innerHTML = html || `<div class="empty">No jobs registered.</div>`;
+  bindJobActions();
+}
+
+function bindJobActions() {
+  for (const card of document.querySelectorAll(".card[data-id]")) {
+    const id = card.dataset.id;
+    card.querySelector('[data-act="run"]').onclick = async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = "Running…";
+      try {
+        const r = await api("POST", `/api/jobs/${id}/run`);
+        toast(`${id} → ${r.status}: ${r.summary || "(no summary)"}`);
+      } catch (err) {
+        toast(`${id} run failed: ${err.message}`);
+      } finally {
+        e.target.disabled = false;
+        e.target.textContent = "Run now";
+        loadJobs();
+        loadActions();
+      }
+    };
+    card.querySelector('[data-act="enable"]').onchange = async (e) => {
+      try {
+        await api("POST", `/api/jobs/${id}/${e.target.checked ? "enable" : "disable"}`);
+        toast(`${id} ${e.target.checked ? "enabled" : "disabled"}`);
+        loadJobs();
+      } catch (err) { toast(err.message); }
+    };
+    card.querySelector('[data-act="save-cron"]').onclick = async () => {
+      const cron = card.querySelector('[data-act="cron"]').value.trim();
+      try {
+        await api("POST", `/api/jobs/${id}/config`, { cron });
+        toast(`${id} schedule → ${cron}`);
+        loadJobs();
+      } catch (err) { toast(err.message); }
+    };
+    card.querySelector('[data-act="view-runs"]').onclick = () => loadRuns(id, card.querySelector('[data-region="runs"]'));
+  }
+}
+
+async function loadRuns(id, target) {
+  try {
+    const runs = await api("GET", `/api/jobs/${id}/runs?limit=15`);
+    if (!runs.length) { target.innerHTML = `<p class="empty">No runs yet.</p>`; return; }
+    target.innerHTML = `
+      <details open><summary>Last ${runs.length} run${runs.length===1?"":"s"}</summary>
+        <table>
+          <thead><tr><th>Started</th><th>Status</th><th>Trigger</th><th>Summary</th><th></th></tr></thead>
+          <tbody>${runs.map(r => `
+            <tr>
+              <td class="mono">${fmt(r.startedAt)}</td>
+              <td><span class="verdict ${escape(r.status === "completed" ? "auto_committed" : "errored")}">${escape(r.status)}</span></td>
+              <td>${escape(r.trigger)}</td>
+              <td>${escape(r.summary || "—")}</td>
+              <td><a href="#" data-runid="${escape(r.id)}" data-jobid="${escape(id)}" class="open-run">open</a></td>
+            </tr>`).join("")}</tbody>
+        </table>
+      </details>`;
+    target.querySelectorAll(".open-run").forEach(a => a.onclick = (e) => {
+      e.preventDefault();
+      openRun(a.dataset.jobid, a.dataset.runid);
+    });
+  } catch (err) {
+    target.innerHTML = `<p class="empty">Failed: ${escape(err.message)}</p>`;
+  }
+}
+
+async function openRun(jobId, runId) {
+  try {
+    const run = await api("GET", `/api/jobs/${jobId}/runs/${runId}`);
+    const w = window.open("", "_blank");
+    // F-12: ship a strict CSP via meta tag in the popup so even if a future
+    // field bypasses escape() the new window can't run inline scripts or
+    // load resources from anywhere except this origin and self.
+    w.document.write(`<!doctype html><html><head>
+      <meta charset="utf-8">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+      <title>Run ${escape(runId.slice(0, 8))}</title>
+    </head><body></body></html>`);
+    w.document.close();
+    w.document.body.style.background = "#0a0a0b";
+    w.document.body.style.color = "#d4d4dc";
+    w.document.body.style.font = "13px -apple-system,sans-serif";
+    const rawHtml = `
+      <div style="max-width:1100px;margin:0 auto;padding:24px">
+        <h1 style="font-size:18px">Run · ${escape(run.id)}</h1>
+        <p>Job: <b>${escape(run.jobId)}</b> · status: <b>${escape(run.status)}</b> · trigger: ${escape(run.trigger)}</p>
+        <p>Started: ${fmt(run.startedAt)} · Finished: ${fmt(run.finishedAt)}</p>
+        ${run.summary ? `<p><b>Summary:</b> ${escape(run.summary)}</p>` : ""}
+        ${run.error ? `<p style="color:#f7768e"><b>Error:</b> ${escape(run.error)}</p>` : ""}
+        <h3 style="margin-top:20px">Actions (${(run.actions || []).length})</h3>
+        ${(run.actions || []).map(a => `
+          <div style="border:1px solid #2c2c34;border-radius:6px;padding:10px 14px;margin:8px 0;background:#16161a">
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <span style="font-family:monospace;font-size:11.5px">${fmt(a.ts)}</span>
+              <span class="verdict ${escape(a.verdict)}" style="font-size:11px;padding:1px 6px;border-radius:4px">${escape(a.verdict)}</span>
+              <span style="font-family:monospace">${escape(a.kind)}</span>
+              ${a.target ? `<span>→ ${escape(a.target)}</span>` : ""}
+            </div>
+            ${a.summary ? `<p style="color:#a9a9b3;margin:4px 0">${escape(a.summary)}</p>` : ""}
+            <details><summary style="color:#7c7c87;font-size:12px">payload</summary><pre style="background:#1c1c21;padding:10px;font-size:11px;overflow:auto;max-height:240px;border-radius:4px">${escape(JSON.stringify(a.payload, null, 2))}</pre></details>
+          </div>`).join("")}
+        <h3 style="margin-top:20px">Log</h3>
+        <pre style="background:#1c1c21;padding:12px;font-size:11.5px;overflow:auto;max-height:500px;border-radius:6px">${escape((run.log || []).map(l => `[${new Date(l.ts).toLocaleTimeString()}] ${l.level.padEnd(5)} ${l.message}`).join("\n"))}</pre>
+      </div>`;
+    // F-12: defence-in-depth — escape() is the primary guard, DOMPurify
+    // is the safety net that strips any tag/attribute that escape()
+    // missed (e.g. via a future field that bypasses it).
+    w.document.body.innerHTML = (typeof DOMPurify !== "undefined")
+      ? DOMPurify.sanitize(rawHtml, { ADD_ATTR: ["open"] })
+      : rawHtml;
+  } catch (err) { toast("Failed: " + err.message); }
+}
+
+async function loadActions() {
+  try {
+    const acts = await api("GET", "/api/jobs/actions?sinceMs=" + (7*24*60*60*1000));
+    const tbody = $("#actions tbody");
+    if (!acts.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty">No actions yet.</td></tr>`; return; }
+    tbody.innerHTML = acts.slice(0, 200).map(a => `
+      <tr>
+        <td class="mono">${fmt(a.ts)}</td>
+        <td>${escape(a.jobId)}</td>
+        <td class="mono">${escape(a.kind.replace(/^[a-z0-9-]+__/, ""))}</td>
+        <td>${escape(a.target || "—")}</td>
+        <td><span class="verdict ${escape(a.verdict)}">${escape(a.verdict)}</span></td>
+        <td>${escape(a.summary || "—")}</td>
+      </tr>`).join("");
+  } catch (err) { console.error(err); }
+}
+
+async function loadPolicy() {
+  try {
+    const p = await api("GET", "/api/jobs/policy");
+    const rows = Object.entries(p).map(([k, v]) => {
+      const display = Array.isArray(v) ? `<code>${escape(JSON.stringify(v))}</code>` : `<code>${escape(JSON.stringify(v))}</code>`;
+      return `<tr><td>${escape(k)}</td><td>${display}</td></tr>`;
+    }).join("");
+    $("#policy").innerHTML = rows;
+  } catch (err) { console.error(err); }
+}
+
+// ───── Phase U08 — dynamic-jobs CRUD form wiring + delete buttons ─────
+const newJobBtn = document.getElementById("newJobBtn");
+const newJobForm = document.getElementById("newJobForm");
+newJobBtn.onclick = () => { newJobForm.style.display = newJobForm.style.display === "none" ? "block" : "none"; };
+document.getElementById("njCancel").onclick = () => { newJobForm.style.display = "none"; };
+document.getElementById("njSave").onclick = async () => {
+  const body = {
+    title: document.getElementById("njTitle").value.trim(),
+    cron: document.getElementById("njCron").value.trim(),
+    model: document.getElementById("njModel").value,
+    deliver: {
+      kind: document.getElementById("njDeliver").value,
+      target: document.getElementById("njDelTarget").value.trim() || null,
+    },
+    mcps: document.getElementById("njMcps").value.split(",").map((s) => s.trim()).filter(Boolean),
+    prompt: document.getElementById("njPrompt").value.trim(),
+    attachSkills: document.getElementById("njAttachSkills").checked,
+  };
+  if (!body.title || !body.cron || !body.prompt) {
+    toast("title, cron, and prompt are required");
+    return;
+  }
+  try {
+    await api("POST", "/api/jobs", body);
+    toast("Job saved");
+    newJobForm.style.display = "none";
+    document.getElementById("njTitle").value = "";
+    document.getElementById("njPrompt").value = "";
+    document.getElementById("njCron").value = "";
+    document.getElementById("njDelTarget").value = "";
+    document.getElementById("njMcps").value = "";
+    loadJobs();
+  } catch (e) {
+    toast("Save failed: " + e.message);
+  }
+};
+
+(async () => {
+  await loadJobs();
+  await loadActions();
+  await loadPolicy();
+  // Poll every 30 s so the UI stays current without manual refresh.
+  setInterval(loadJobs, 30000);
+  setInterval(loadActions, 60000);
+})();
+</script>
+</body>
+</html>

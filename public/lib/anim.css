@@ -1,0 +1,67 @@
+/* Phase 7 — animation token system.
+ *
+ * Single source of truth for ease curves, durations, and reduced-motion.
+ * Every animation in public/index.html and ares-app/renderer/compact.html
+ * should reference these variables instead of hard-coded values, so we
+ * can ship a uniform feel and toggle slow-mo for debugging.
+ *
+ * Decisions (AUDIT-PLAN §M-4, prompt defaults verbatim):
+ *   --ease-out:    cubic-bezier(0.22, 0.61, 0.36, 1)
+ *   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1)
+ *   --ease-spring: cubic-bezier(0.5, 1.6, 0.4, 1)
+ *   --dur-fast:    120ms
+ *   --dur-base:    200ms
+ *   --dur-slow:    320ms
+ *
+ * Slow-mo: setting `<html data-anim-slow="1">` (toggled by anim.js when
+ * the cookie ares-anim-slow=1 is present) multiplies every duration 4×.
+ *
+ * Reduced motion: @media (prefers-reduced-motion: reduce) collapses
+ * every transition + animation to a near-instant duration so users
+ * with vestibular sensitivity or low-power devices don't pay the cost.
+ *
+ * Phase 7a ships the token system + reduced-motion override only.
+ * Phase 7b will rewrite the existing keyframes to consume the tokens.
+ */
+
+:root {
+  --ease-out:    cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.5, 1.6, 0.4, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  /* Per-axis tokens for "fade-only" reduced-motion fallbacks. */
+  --opacity-fast: var(--dur-fast);
+}
+
+/* Slow-mo debug mode — multiply every duration by 4. Toggled via
+ * /api/dev/anim?slow=1 (sets a cookie that anim.js reads on load). */
+:root[data-anim-slow="1"] {
+  --dur-fast: 480ms;
+  --dur-base: 800ms;
+  --dur-slow: 1280ms;
+  --opacity-fast: 480ms;
+}
+
+/* Reduced-motion: collapse transitions to near-instant, kill keyframes.
+ * Specific selectors that genuinely need motion to communicate state
+ * (e.g. .heartbeat-dot signalling liveness) can opt out via
+ * @media (prefers-reduced-motion: no-preference). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ease-out:    linear;
+    --ease-in-out: linear;
+    --ease-spring: linear;
+    --dur-fast: 1ms;
+    --dur-base: 1ms;
+    --dur-slow: 1ms;
+    --opacity-fast: 1ms;
+  }
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

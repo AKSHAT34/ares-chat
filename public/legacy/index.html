@@ -1,0 +1,1523 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ares</title>
+
+  <!-- Tailwind v4 (browser build) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['-apple-system','BlinkMacSystemFont','"SF Pro Text"','"Segoe UI"','Inter','system-ui','sans-serif'],
+            mono: ['"SF Mono"','Menlo','"JetBrains Mono"','ui-monospace','monospace'],
+          },
+          colors: {
+            // Neutral ramp (Claude-ish dark surfaces)
+            surface: {
+              0:   "#0a0a0b", // base page
+              50:  "#111113", // sidebar bg
+              100: "#16161a", // composer / header
+              200: "#1c1c21", // cards, inset
+              300: "#23232a", // raised card
+              400: "#2c2c34", // borders prominent
+              500: "#3a3a42", // borders muted
+              600: "#55555f",
+              700: "#7c7c87",
+              800: "#a9a9b3",
+              900: "#d4d4dc",
+              950: "#eeeef2",
+            },
+            accent: {
+              DEFAULT: "#cb7c58",
+              fg: "#ffffff",
+              soft: "#e2a27f",
+              deep: "#a25e3e",
+              glow: "rgba(203,124,88,0.14)",
+            },
+            // State colors used by the message-state machine
+            state: {
+              thinking: "#f5b84c",
+              streaming: "#56c79f",
+              error:    "#f7768e",
+              muted:    "#72727d",
+            },
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Markdown + sanitize + highlight -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked-highlight@2.1.2/lib/index.umd.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/common.min.js"></script>
+
+  <!-- Phase 7a — animation token system (ease curves, durations, reduced-motion). -->
+  <link rel="stylesheet" href="/lib/anim.css?v=__BUILD__">
+
+  <style>
+    /* ======================================================================
+       Global tokens
+    ====================================================================== */
+    :root {
+      --accent: #cb7c58;
+      --accent-soft: #e2a27f;
+      --accent-glow: rgba(203,124,88,0.14);
+      --surface-0: #0a0a0b;
+      --surface-50: #111113;
+      --surface-100: #16161a;
+      --surface-200: #1c1c21;
+      --surface-300: #23232a;
+      --surface-400: #2c2c34;
+      --surface-500: #3a3a42;
+      --border-muted: #23232a;
+      --border: #2c2c34;
+      --text-0:  #f4f4f8;
+      --text-1:  #d4d4dc;
+      --text-2:  #a9a9b3;
+      --text-3:  #7c7c87;
+      --text-4:  #55555f;
+    }
+
+    html, body { height: 100%; }
+    body {
+      background: var(--surface-0);
+      color: var(--text-1);
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+      font-feature-settings: "ss01","cv11";
+    }
+
+    /* Scrollbars */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: var(--surface-300); border-radius: 6px; border: 2px solid var(--surface-0); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--surface-400); }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    /* ======================================================================
+       Animations
+    ====================================================================== */
+    /* Phase 7b — keyframes consume Phase-7a tokens. The token CSS lives
+       at /lib/anim.css and is loaded above; this section just rewrites
+       the existing animations to use those variables so reduced-motion
+       and slow-mo apply uniformly. */
+    @keyframes fadeIn     { 0% { opacity: 0; } 100% { opacity: 1; } }
+    @keyframes slideUp    { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
+    @keyframes popIn      { 0% { opacity: 0; transform: scale(0.94); } 100% { opacity: 1; transform: scale(1); } }
+    @keyframes thinkDot   { 0%,80%,100% { transform: translateY(0) scale(0.8); opacity: 0.45; } 40% { transform: translateY(-5px) scale(1); opacity: 1; } }
+    @keyframes caretBlink { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }
+    @keyframes shimmer    { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    @keyframes pulseRing  { 0%,100% { box-shadow: 0 0 0 0 rgba(245,184,76,0.45); } 70% { box-shadow: 0 0 0 6px rgba(245,184,76,0); } }
+    /* @keyframes spin removed — was unused (caught by AUDIT-FINDINGS §F). */
+
+    /* Phase 7b — message fade-in: 8 px translateY + opacity, durBase ease-out. */
+    @keyframes msgFadeIn  { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
+    .turn { animation: msgFadeIn var(--dur-base) var(--ease-out) both; }
+
+    /* Phase 7b — token-driven utility classes. Old hard-coded
+       durations + curves still work, but new code should use these. */
+    .fade-in   { animation: fadeIn  var(--dur-base) var(--ease-out) both; }
+    .slide-up  { animation: slideUp var(--dur-base) var(--ease-out) both; }
+    .pop-in    { animation: popIn   var(--dur-base) var(--ease-spring) both; }
+
+    /* ======================================================================
+       Layout primitives
+    ====================================================================== */
+    .app-shell { display: grid; grid-template-columns: 264px 1fr; height: 100vh; }
+    @media (max-width: 768px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+    }
+
+    /* ======================================================================
+       Sidebar
+    ====================================================================== */
+    .sidebar {
+      background: var(--surface-50);
+      border-right: 1px solid var(--border-muted);
+      display: flex; flex-direction: column;
+      min-height: 0;
+    }
+
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      padding: 14px 14px 10px 14px;
+    }
+    .brand-mark {
+      width: 30px; height: 30px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #cb7c58, #e2a27f);
+      display: grid; place-items: center;
+      color: white; font-weight: 700; font-size: 14px;
+      box-shadow: 0 4px 14px -4px rgba(203,124,88,0.55), inset 0 1px 0 rgba(255,255,255,0.22);
+      flex-shrink: 0;
+    }
+    .brand-name  { color: var(--text-0); font-weight: 600; font-size: 14px; line-height: 1.1; }
+    .brand-tagline {
+      color: var(--accent-soft);
+      font-size: 10.5px;
+      font-weight: 500;
+      margin-top: 3px;
+      letter-spacing: 0.01em;
+      font-style: italic;
+      opacity: 0.92;
+    }
+    .brand-model { color: var(--text-4); font-size: 11px; font-family: ui-monospace,Menlo,monospace; margin-top: 3px; }
+
+    .btn-newchat {
+      margin: 4px 10px 8px 10px;
+      padding: 9px 12px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--surface-100);
+      color: var(--text-1);
+      font-size: 13px;
+      display: flex; align-items: center; gap: 8px;
+      cursor: pointer;
+      transition: background 140ms, border-color 140ms, transform 120ms;
+      text-align: left;
+    }
+    .btn-newchat:hover { background: var(--surface-200); border-color: var(--surface-500); }
+    .btn-newchat:active { transform: translateY(1px); }
+
+    .pane-tabs {
+      display: flex; gap: 16px;
+      padding: 4px 14px 0 14px;
+      border-bottom: 1px solid var(--border-muted);
+    }
+    .pane-tab {
+      position: relative;
+      font-size: 12.5px; font-weight: 500;
+      padding: 4px 0 8px 0;
+      color: var(--text-3);
+      background: transparent; border: none; cursor: pointer;
+      transition: color 140ms;
+    }
+    .pane-tab:hover { color: var(--text-1); }
+    .pane-tab.active { color: var(--text-0); }
+    .pane-tab::after {
+      content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+      background: var(--accent); border-radius: 2px 2px 0 0;
+      transform: scaleX(0); transform-origin: left;
+      transition: transform 180ms cubic-bezier(0.16,1,0.3,1);
+    }
+    .pane-tab.active::after { transform: scaleX(1); }
+
+    .pane { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px; }
+
+    /* Session row */
+    .session-row {
+      position: relative;
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 10px;
+      border-radius: 7px;
+      cursor: pointer;
+      color: var(--text-2);
+      font-size: 13px;
+      transition: background 120ms, color 120ms;
+      min-height: 32px;
+    }
+    .session-row:hover { background: var(--surface-100); color: var(--text-0); }
+    .session-row.active { background: var(--surface-200); color: var(--text-0); }
+    .session-row.active::before {
+      content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;
+      background: var(--accent); border-radius: 2px;
+    }
+    .session-row .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-row .pin-mark { color: var(--accent); font-size: 10px; flex-shrink: 0; }
+    /* Streaming indicator: a small pulsing green dot on the left of the row
+       so the user can see runs continuing in other sessions while they're
+       viewing a different one. */
+    .session-row .streaming-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--state-streaming, #56c79f);
+      box-shadow: 0 0 0 0 rgba(86,199,159,0.6);
+      flex-shrink: 0;
+      animation: streamPulse 1.6s ease-in-out infinite;
+    }
+    @keyframes streamPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(86,199,159,0.55); }
+      50%      { box-shadow: 0 0 0 5px rgba(86,199,159,0); }
+    }
+    /* When a row is streaming we tint the title slightly so it stands out
+       even without the dot (if the dot ever scrolls out of view). */
+    .session-row.streaming .title { color: var(--text-0); }
+    .session-actions {
+      display: flex; gap: 2px;
+      opacity: 0; transition: opacity 120ms;
+    }
+    .session-row:hover .session-actions,
+    .session-row:focus-within .session-actions { opacity: 1; }
+    .session-actions button {
+      width: 22px; height: 22px;
+      display: grid; place-items: center;
+      border-radius: 5px;
+      background: transparent; border: none; cursor: pointer;
+      color: var(--text-3);
+      transition: background 120ms, color 120ms;
+    }
+    .session-actions button:hover { background: var(--surface-300); color: var(--text-0); }
+    .session-actions button.del:hover { color: var(--state-error, #f7768e); }
+    .session-actions button.pin.active { color: var(--accent); }
+
+    .section-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-4);
+      padding: 10px 10px 4px 10px;
+    }
+
+    /* Sidebar footer */
+    .sidebar-footer {
+      border-top: 1px solid var(--border-muted);
+      padding: 8px 10px;
+      display: flex; align-items: center; gap: 8px;
+      font-size: 11.5px;
+      color: var(--text-4);
+      font-family: ui-monospace,Menlo,monospace;
+    }
+    .sidebar-footer .status { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sidebar-footer .status.ok { color: var(--state-streaming, #56c79f); }
+    .sidebar-footer .status.err { color: var(--state-error, #f7768e); }
+    .icon-btn {
+      width: 26px; height: 26px;
+      display: grid; place-items: center;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface-100);
+      color: var(--text-2);
+      cursor: pointer;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .icon-btn:hover { background: var(--surface-200); color: var(--text-0); border-color: var(--surface-500); }
+
+    /* MCP rows */
+    .mcp-search {
+      width: 100%;
+      background: var(--surface-100);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 6px 10px;
+      color: var(--text-1);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .mcp-search:focus { outline: none; border-color: var(--accent); }
+    /* Phase 7b — MCP toggle spring on click. The animation runs via
+       `.mcp-row:active` so just tapping/clicking dispatches the
+       0.96 → 1.0 scale through ease-spring. */
+    .mcp-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12.5px;
+      transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-spring);
+    }
+    .mcp-row:hover { background: var(--surface-100); }
+    .mcp-row:active { transform: scale(0.96); }
+    .mcp-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    }
+    .mcp-dot.always { background: var(--accent); }
+    .mcp-dot.running { background: #56c79f; box-shadow: 0 0 8px rgba(86,199,159,0.5); }
+    .mcp-dot.starting { background: #f5b84c; animation: pulseRing 1.2s infinite; }
+    .mcp-dot.error { background: #f7768e; }
+    .mcp-dot.idle { background: var(--surface-500); }
+    .mcp-name { flex: 1; font-family: ui-monospace,Menlo,monospace; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mcp-count { font-family: ui-monospace,Menlo,monospace; color: var(--text-4); font-size: 10.5px; }
+
+    /* ======================================================================
+       Main / header / messages / composer
+    ====================================================================== */
+    .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+
+    .header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border-muted);
+      background: rgba(22,22,26,0.6);
+      backdrop-filter: saturate(1.2) blur(8px);
+      flex-shrink: 0;
+    }
+    .header-title {
+      color: var(--text-0);
+      font-size: 14px; font-weight: 500;
+      padding: 4px 8px; border-radius: 6px;
+      cursor: text;
+      transition: background 120ms;
+      max-width: 70ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .header-title:hover { background: var(--surface-100); }
+    .header-meta { margin-left: auto; color: var(--text-4); font-size: 11.5px; font-family: ui-monospace,Menlo,monospace; display: flex; align-items: center; gap: 12px; }
+
+    /* Messages container */
+    .messages {
+      flex: 1; min-height: 0;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+      padding: 28px 24px 24px 24px;
+    }
+    .messages-inner { max-width: 768px; margin: 0 auto; }
+
+    /* Phase 7b — scroll-to-bottom pill: 12 px translateY + opacity, ease-out. */
+    @keyframes jumpPillIn {
+      from { opacity: 0; transform: translate(-50%, 12px); }
+      to   { opacity: 1; transform: translate(-50%, 0); }
+    }
+    .jump-pill {
+      position: absolute; bottom: 108px; left: 50%; transform: translateX(-50%);
+      z-index: 15;
+      background: var(--accent);
+      color: white;
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: none; cursor: pointer;
+      box-shadow: 0 6px 22px -6px rgba(203,124,88,0.7);
+      display: flex; align-items: center; gap: 6px;
+      animation: jumpPillIn var(--dur-base) var(--ease-out) both;
+      transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+    }
+    .jump-pill:hover { background: var(--accent-soft); transform: translateX(-50%) translateY(-1px); }
+
+    /* -------- Message turns -------- */
+    /* Phase 7b — turn animation moved to .turn { animation: msgFadeIn ... }
+       above. Keep the margin here. */
+    .turn { margin-bottom: 22px; }
+    .turn.user {
+      display: flex; justify-content: flex-end;
+    }
+    .turn.user .user-col {
+      /* Constrain the whole user-side column so bubbles + attachment chips
+         share the same tidy max-width, matching Claude/ChatGPT. */
+      max-width: min(62%, 520px);
+      min-width: 0;
+    }
+    .turn.user .bubble {
+      background: var(--surface-200);
+      border: 1px solid var(--border);
+      color: var(--text-0);
+      padding: 10px 14px;
+      border-radius: 18px 18px 4px 18px;
+      font-size: 14.5px; line-height: 1.55;
+      white-space: pre-wrap;
+      /* overflow-wrap: anywhere lets long URLs/emails break at any char so
+         they don't overflow. word-break covers the no-space edge case. */
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      hyphens: auto;
+      /* Respect parent column's max-width (set on .user-col). */
+      max-width: 100%;
+    }
+    .turn.user .bubble-attachments {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      justify-content: flex-end;
+      margin-bottom: 6px;
+      max-width: 100%;
+    }
+    .turn.assistant {
+      display: grid;
+      grid-template-columns: 30px 1fr;
+      gap: 14px;
+    }
+    .assistant-avatar {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #cb7c58, #e2a27f);
+      display: grid; place-items: center;
+      color: white; font-weight: 700; font-size: 12px;
+      box-shadow: 0 3px 10px -3px rgba(203,124,88,0.45), inset 0 1px 0 rgba(255,255,255,0.2);
+      position: sticky; top: 0;
+      flex-shrink: 0;
+    }
+    .assistant-avatar.thinking { background: linear-gradient(135deg, #f5b84c, #f5b84c66); }
+    .assistant-avatar.error { background: linear-gradient(135deg, #f7768e, #f7768e99); }
+    .assistant-body {
+      min-width: 0;
+      padding-top: 3px;
+    }
+
+    /* Thinking bubble */
+    .thinking-bubble {
+      display: inline-flex; align-items: center; gap: 8px;
+      color: var(--text-3);
+      font-size: 13px;
+      padding: 4px 10px 4px 4px;
+      border-radius: 999px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      transition: color 140ms, background 140ms;
+    }
+    .thinking-bubble:hover { color: var(--text-1); background: var(--surface-100); }
+    .thinking-dots { display: inline-flex; gap: 3px; align-items: flex-end; height: 12px; padding-left: 6px; }
+    .thinking-dots span {
+      width: 4px; height: 4px; border-radius: 50%;
+      background: var(--state-thinking, #f5b84c);
+      animation: thinkDot 1.2s infinite ease-in-out;
+    }
+    .thinking-dots span:nth-child(2) { animation-delay: 0.15s; }
+    .thinking-dots span:nth-child(3) { animation-delay: 0.3s; }
+    .thinking-chevron {
+      display: inline-block;
+      transition: transform 180ms ease;
+      font-size: 9px; opacity: 0.7; margin-left: 2px;
+    }
+    .thinking-chevron.open { transform: rotate(180deg); }
+
+    .thinking-transcript {
+      overflow: hidden;
+      transition: max-height 220ms cubic-bezier(0.4,0,0.2,1), opacity 200ms;
+      max-height: 0;
+      opacity: 0;
+    }
+    .thinking-transcript.open {
+      max-height: 720px;
+      opacity: 1;
+    }
+    .thinking-transcript-inner {
+      margin: 6px 0 8px 0;
+      padding: 8px 10px;
+      background: var(--surface-100);
+      border: 1px solid var(--border-muted);
+      border-radius: 10px;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+
+    /* Tool call card */
+    .tool-card {
+      border-radius: 8px;
+      border: 1px solid var(--border-muted);
+      background: var(--surface-100);
+      font-family: ui-monospace,Menlo,monospace;
+      font-size: 12px;
+      overflow: hidden;
+      animation: popIn 220ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .tool-card.running {
+      background-image: linear-gradient(90deg, var(--surface-100) 0%, var(--surface-200) 50%, var(--surface-100) 100%);
+      background-size: 200% 100%;
+      animation: shimmer 1.6s linear infinite, popIn 220ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .tool-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .tool-head:hover { background: var(--surface-200); }
+    .tool-head .chev { font-size: 9px; color: var(--text-4); transition: transform 180ms; }
+    .tool-head .chev.open { transform: rotate(90deg); }
+    .tool-name { color: var(--accent); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-status {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px;
+      color: var(--text-3);
+    }
+    .tool-status .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .tool-status.running .dot { background: var(--state-thinking, #f5b84c); animation: pulseRing 1.2s infinite; }
+    .tool-status.done .dot    { background: var(--state-streaming, #56c79f); box-shadow: 0 0 6px rgba(86,199,159,0.5); }
+    .tool-status.error .dot   { background: var(--state-error, #f7768e); }
+    .tool-status.done  { color: #56c79f; }
+    .tool-status.error { color: #f7768e; }
+    .tool-body {
+      max-height: 0; overflow: hidden;
+      transition: max-height 220ms cubic-bezier(0.4,0,0.2,1);
+      border-top: 0 solid transparent;
+    }
+    .tool-body.open {
+      max-height: 420px;
+      border-top: 1px solid var(--border-muted);
+    }
+    .tool-body-inner { padding: 8px 10px; background: var(--surface-0); }
+    .tool-io-label { color: var(--text-4); font-size: 10.5px; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .tool-input  { color: #f5b84c; white-space: pre-wrap; word-wrap: break-word; max-height: 160px; overflow-y: auto; margin: 0 0 6px 0; padding: 0; }
+    .tool-output { color: var(--text-1); white-space: pre-wrap; word-wrap: break-word; max-height: 260px; overflow-y: auto; margin: 0; padding: 0; }
+
+    /* Attachment chips (user side) */
+    .att-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--surface-200);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 4px 6px;
+      font-size: 11.5px;
+      color: var(--text-1);
+      max-width: 240px;
+      animation: popIn 200ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .att-chip img { width: 32px; height: 32px; border-radius: 5px; object-fit: cover; }
+    .att-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .att-chip .meta { color: var(--text-4); font-size: 10px; }
+    .att-chip .remove {
+      width: 18px; height: 18px;
+      display: grid; place-items: center;
+      border-radius: 4px;
+      background: transparent; border: none; cursor: pointer;
+      color: var(--text-3);
+    }
+    .att-chip .remove:hover { background: var(--surface-300); color: var(--text-0); }
+
+    /* Streaming caret */
+    .caret::after {
+      content: "▋";
+      color: var(--accent);
+      margin-left: 2px;
+      animation: caretBlink 0.9s step-end infinite;
+    }
+
+    /* Error / interrupted pills */
+    .state-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-top: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: var(--surface-100);
+      border: 1px solid var(--border);
+      color: var(--text-2);
+    }
+    .state-pill.error { color: #f7768e; border-color: rgba(247,118,142,0.3); background: rgba(247,118,142,0.08); }
+    .state-pill.interrupted { color: var(--text-3); }
+
+    /* Credentials banner */
+    .cred-banner {
+      margin-top: 10px;
+      padding: 12px 14px;
+      background: rgba(245,184,76,0.08);
+      border: 1px solid rgba(245,184,76,0.35);
+      border-radius: 10px;
+      max-width: 520px;
+      animation: slideUp 220ms cubic-bezier(0.16,1,0.3,1);
+    }
+    .cred-banner.cred-banner-ok {
+      background: rgba(86,199,159,0.08);
+      border-color: rgba(86,199,159,0.35);
+    }
+    .cred-banner-head { display: flex; align-items: center; gap: 8px; }
+    .cred-banner-icon { font-size: 16px; }
+    .cred-banner-title { color: var(--text-0); font-weight: 600; font-size: 13px; }
+    .cred-banner-msg { color: var(--text-2); font-size: 12.5px; margin-top: 6px; }
+    .cred-banner-steps {
+      margin: 8px 0 10px 18px;
+      padding: 0;
+      color: var(--text-2); font-size: 12px; line-height: 1.6;
+    }
+    .cred-banner-steps code {
+      background: var(--surface-200);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: ui-monospace,Menlo,monospace;
+      color: var(--accent-soft);
+      font-size: 11.5px;
+    }
+    .cred-banner-actions { display: flex; gap: 6px; }
+    .cred-banner-btn {
+      padding: 5px 12px;
+      border-radius: 7px;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-1);
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .cred-banner-btn.primary {
+      background: #f5b84c;
+      color: #1a1300;
+      font-weight: 600;
+    }
+    .cred-banner-btn.primary:hover:not(:disabled) { background: #f9c96f; }
+    .cred-banner-btn.primary:disabled { opacity: 0.6; cursor: wait; }
+    .cred-banner-btn.ghost {
+      border-color: var(--border);
+      color: var(--text-2);
+    }
+    .cred-banner-btn.ghost:hover { color: var(--text-0); background: var(--surface-200); }
+
+    /* ======================================================================
+       Approval card (Phase U06) — inline confirmation for high/medium-risk tools
+    ====================================================================== */
+    .approval-card {
+      margin: 10px 0;
+      border-radius: 10px;
+      padding: 12px 14px;
+      animation: slideUp 220ms cubic-bezier(0.16,1,0.3,1);
+      max-width: 560px;
+    }
+    .approval-card.risk-high {
+      background: rgba(247,118,142,0.06);
+      border: 1px solid rgba(247,118,142,0.45);
+    }
+    .approval-card.risk-medium {
+      background: rgba(245,184,76,0.06);
+      border: 1px solid rgba(245,184,76,0.40);
+    }
+    .approval-card-head { display: flex; align-items: center; gap: 8px; }
+    .approval-card-icon { font-size: 18px; }
+    .approval-card-title { color: var(--text-0); font-weight: 600; font-size: 13px; }
+    .approval-card-body { margin: 8px 0 10px 0; }
+    .approval-card-tool {
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 12.5px;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    .approval-card-reason {
+      color: var(--text-3);
+      font-size: 11.5px;
+      margin-bottom: 6px;
+    }
+    .approval-card-input {
+      background: var(--surface-200);
+      border: 1px solid var(--border-muted);
+      border-radius: 6px;
+      padding: 6px 8px;
+      max-height: 200px;
+      overflow: auto;
+      font-size: 11.5px;
+      font-family: ui-monospace, Menlo, monospace;
+      color: var(--text-1);
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .approval-card-actions { display: flex; gap: 8px; }
+    .approval-card-btn {
+      padding: 6px 14px;
+      border-radius: 7px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .approval-card-btn.approve {
+      background: var(--accent);
+      color: white;
+    }
+    .approval-card-btn.approve:hover:not(:disabled) { background: var(--accent-soft); }
+    .approval-card-btn.deny {
+      background: transparent;
+      color: var(--text-2);
+      border-color: var(--border);
+    }
+    .approval-card-btn.deny:hover:not(:disabled) {
+      color: #f7768e;
+      border-color: rgba(247,118,142,0.5);
+    }
+    .approval-card-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .approval-card.resolved .approval-card-input { opacity: 0.6; }
+    .approval-card.resolved.approve { border-color: rgba(86,199,159,0.4); }
+    .approval-card.resolved.deny { border-color: rgba(247,118,142,0.4); }
+    .approval-card-stamp {
+      font-size: 12px;
+      color: var(--text-3);
+      font-family: ui-monospace, Menlo, monospace;
+      margin-top: 6px;
+    }
+    .approval-card.resolved.approve .approval-card-stamp { color: #56c79f; }
+    .approval-card.resolved.deny .approval-card-stamp { color: #f7768e; }
+
+    /* ======================================================================
+       Long-run survival UI (Items 3, 4, 6, 7)
+    ====================================================================== */
+
+    /* Heartbeat progress strip — one-slot, updates in place */
+    .heartbeat-strip {
+      display: inline-flex; align-items: center; gap: 8px;
+      margin-top: 8px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: var(--surface-100);
+      border: 1px solid var(--border-muted);
+      font-size: 11px;
+      font-family: ui-monospace,Menlo,monospace;
+      color: var(--text-3);
+    }
+    .heartbeat-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--state-streaming, #56c79f);
+      animation: pulseRing 1.2s infinite;
+    }
+
+    /* Credentials mid-stream refresh chip */
+    .cred-refresh-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-top: 6px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: rgba(245,184,76,0.1);
+      border: 1px solid rgba(245,184,76,0.3);
+      font-size: 11px;
+      color: #f5b84c;
+      animation: slideUp 180ms;
+    }
+
+    /* Stall warning chip */
+    .stall-chip {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 4px 10px;
+      border-radius: 8px;
+      background: rgba(247,118,142,0.08);
+      border: 1px solid rgba(247,118,142,0.3);
+      color: #f7768e;
+      font-size: 12px;
+      animation: slideUp 200ms;
+    }
+
+    /* Checkpoint resume banner */
+    .resume-banner {
+      margin: 0 auto 18px auto;
+      padding: 12px 16px;
+      background: rgba(86,199,159,0.08);
+      border: 1px solid rgba(86,199,159,0.3);
+      border-radius: 10px;
+      max-width: 560px;
+      animation: slideUp 220ms;
+    }
+    .resume-banner-title {
+      color: var(--text-0);
+      font-weight: 600;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .resume-banner-msg {
+      color: var(--text-2);
+      font-size: 12.5px;
+      margin-bottom: 10px;
+    }
+    .resume-banner-actions { display: flex; gap: 6px; }
+
+    /* Parallel-mode hint (composer top) */
+    .parallel-hint {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      background: rgba(203,124,88,0.08);
+      border-bottom: 1px solid rgba(203,124,88,0.22);
+      color: var(--text-1);
+      font-size: 12.5px;
+      border-top-left-radius: 16px;
+      border-top-right-radius: 16px;
+      animation: slideUp 180ms;
+    }
+    .parallel-hint-btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 120ms;
+    }
+    .parallel-hint-btn:hover { background: var(--accent-soft); }
+    .parallel-hint-dismiss {
+      margin-left: auto;
+      background: transparent;
+      border: none;
+      color: var(--text-3);
+      font-size: 16px;
+      cursor: pointer;
+      width: 20px; height: 20px;
+      display: grid; place-items: center;
+      border-radius: 4px;
+    }
+    .parallel-hint-dismiss:hover { color: var(--text-0); background: var(--surface-200); }
+
+    /* ======================================================================
+       Prose (assistant markdown)
+    ====================================================================== */
+    .prose-chat { color: var(--text-1); font-size: 15px; line-height: 1.65; }
+    .prose-chat > *:first-child { margin-top: 0; }
+    .prose-chat > *:last-child { margin-bottom: 0; }
+    .prose-chat p { margin: 0.6em 0; }
+    .prose-chat strong { color: var(--text-0); font-weight: 600; }
+    .prose-chat a { color: var(--accent); text-underline-offset: 2px; }
+    .prose-chat a:hover { color: var(--accent-soft); }
+    .prose-chat h1,.prose-chat h2,.prose-chat h3,.prose-chat h4 { color: var(--text-0); font-weight: 600; line-height: 1.3; margin: 1.2em 0 0.4em; }
+    .prose-chat h1 { font-size: 1.5em; }
+    .prose-chat h2 { font-size: 1.25em; border-bottom: 1px solid var(--border-muted); padding-bottom: 0.25em; }
+    .prose-chat h3 { font-size: 1.1em; }
+    .prose-chat h4 { font-size: 1em; }
+    .prose-chat ul,.prose-chat ol { margin: 0.6em 0; padding-left: 1.5em; }
+    .prose-chat li { margin: 0.25em 0; }
+    .prose-chat li > p { margin: 0.15em 0; }
+    .prose-chat blockquote { border-left: 3px solid var(--accent); padding-left: 1em; margin: 0.9em 0; color: var(--text-2); font-style: italic; }
+    .prose-chat hr { border: none; border-top: 1px solid var(--border-muted); margin: 1.4em 0; }
+    .prose-chat code { background: var(--surface-200); color: var(--accent-soft); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.88em; border: 1px solid var(--border-muted); font-family: ui-monospace,Menlo,monospace; }
+    .prose-chat pre {
+      position: relative;
+      background: var(--surface-100);
+      border: 1px solid var(--border-muted);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin: 0.8em 0;
+      overflow-x: auto;
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+    .prose-chat pre code { background: transparent; border: none; padding: 0; color: var(--text-1); font-size: 12.5px; }
+    .prose-chat table { border-collapse: collapse; margin: 0.9em 0; display: block; overflow-x: auto; max-width: 100%; }
+    .prose-chat table thead { background: var(--surface-100); }
+    .prose-chat table th,.prose-chat table td { border: 1px solid var(--border-muted); padding: 6px 12px; text-align: left; font-size: 13.5px; }
+    .prose-chat table th { font-weight: 600; color: var(--text-0); }
+    .prose-chat table tr:nth-child(even) { background: rgba(255,255,255,0.015); }
+
+    /* Code copy button */
+    .code-copy {
+      position: absolute; top: 6px; right: 6px;
+      background: var(--surface-200);
+      color: var(--text-2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 2px 8px;
+      font-size: 10.5px;
+      font-family: ui-monospace,Menlo,monospace;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity var(--dur-fast) var(--ease-out),
+                  background var(--dur-fast) var(--ease-out),
+                  color var(--dur-fast) var(--ease-out);
+    }
+    .prose-chat pre:hover .code-copy { opacity: 1; }
+    .code-copy:hover { background: var(--surface-300); color: var(--text-0); }
+    /* Phase 7b — code-copy success morph. JS adds .copied for 1.2s after
+       a successful clipboard write; the green tint + checkmark feel like
+       a confirmation rather than just a label flip. */
+    .code-copy.copied {
+      background: rgba(86,199,159,0.18);
+      color: #56c79f;
+      border-color: rgba(86,199,159,0.4);
+      transform: scale(1.04);
+    }
+
+    /* ======================================================================
+       Composer
+    ====================================================================== */
+    .composer-wrap {
+      padding: 8px 24px 20px 24px;
+      flex-shrink: 0;
+      background: linear-gradient(to top, var(--surface-0) 60%, rgba(10,10,11,0));
+      position: relative; /* anchors slash-autocomplete dropdown */
+    }
+    /* Phase 8a (H-2) — slash-command autocomplete popover. */
+    .slash-pop {
+      position: absolute;
+      bottom: calc(100% - 4px);
+      left: 24px;
+      right: 24px;
+      max-width: 768px;
+      margin: 0 auto;
+      background: var(--surface-100);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 6px 0;
+      max-height: 280px;
+      overflow-y: auto;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+      transform-origin: bottom center;
+      animation: slash-pop-in var(--dur-fast) var(--ease-out);
+      z-index: 5;
+    }
+    @keyframes slash-pop-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .slash-pop[hidden] { display: none; }
+    .slash-pop-row {
+      display: flex; gap: 10px;
+      padding: 6px 14px;
+      cursor: pointer;
+      transition: background var(--dur-fast) var(--ease-out);
+    }
+    .slash-pop-row:hover, .slash-pop-row.sel {
+      background: var(--surface-200);
+    }
+    .slash-pop-name {
+      color: var(--text-0); font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 12px; min-width: 90px;
+    }
+    .slash-pop-args { color: var(--text-3); font-family: ui-monospace, monospace; font-size: 11.5px; }
+    .slash-pop-desc { color: var(--text-2); font-size: 12px; flex: 1; }
+    .composer {
+      max-width: 768px; margin: 0 auto;
+      background: var(--surface-100);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      transition: border-color 160ms, box-shadow 160ms;
+    }
+    .composer:focus-within {
+      border-color: rgba(203,124,88,0.45);
+      box-shadow: 0 0 0 3px rgba(203,124,88,0.12), 0 10px 30px -15px rgba(0,0,0,0.45);
+    }
+    .composer-chips { padding: 8px 12px 0 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .composer-chips:empty { display: none; }
+
+    .composer-row {
+      display: flex; align-items: flex-end; gap: 6px;
+      padding: 8px 8px 8px 10px;
+    }
+    .composer-input {
+      flex: 1;
+      background: transparent;
+      color: var(--text-0);
+      border: none; outline: none;
+      resize: none;
+      font: inherit;
+      font-size: 14.5px;
+      line-height: 1.5;
+      padding: 6px 4px;
+      min-height: 24px;
+      max-height: 240px;
+    }
+    .composer-input::placeholder { color: var(--text-4); }
+
+    .composer-btn {
+      width: 34px; height: 34px;
+      display: grid; place-items: center;
+      border-radius: 9px;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-3);
+      cursor: pointer;
+      transition: color 120ms, background 120ms, border-color 120ms, transform 120ms;
+      flex-shrink: 0;
+    }
+    .composer-btn:hover { color: var(--text-0); background: var(--surface-200); border-color: var(--border); }
+    .composer-btn.active { color: #f7768e; border-color: #f7768e; background: rgba(247,118,142,0.1); }
+    .composer-btn.mode-parallel { color: var(--accent); border-color: var(--accent); }
+
+    .composer-select {
+      flex-shrink: 0;
+      background: var(--surface-0);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-1);
+      font-size: 11.5px;
+      font-family: ui-monospace,Menlo,monospace;
+      padding: 5px 8px;
+      cursor: pointer;
+    }
+    .composer-select:focus { outline: none; border-color: var(--accent); }
+
+    .send-btn {
+      width: 34px; height: 34px;
+      display: grid; place-items: center;
+      border-radius: 9px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      cursor: pointer;
+      transition: background 140ms, transform 120ms, opacity 120ms;
+      flex-shrink: 0;
+    }
+    .send-btn:hover:not(:disabled) { background: var(--accent-soft); }
+    .send-btn:active:not(:disabled) { transform: scale(0.94); }
+    .send-btn:disabled {
+      background: var(--surface-300); color: var(--text-4);
+      cursor: not-allowed;
+    }
+    .stop-btn {
+      background: #d84855;
+    }
+    .stop-btn:hover:not(:disabled) { background: #ec6070; }
+
+    /* ======================================================================
+       Welcome screen
+    ====================================================================== */
+    .welcome { max-width: 640px; margin: 8vh auto 0 auto; text-align: center; animation: fadeIn 300ms; }
+    .welcome .hero-mark {
+      width: 56px; height: 56px; margin: 0 auto 16px auto;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #cb7c58, #e2a27f);
+      display: grid; place-items: center;
+      color: white; font-size: 24px; font-weight: 700;
+      box-shadow: 0 10px 30px -10px rgba(203,124,88,0.6), inset 0 2px 0 rgba(255,255,255,0.2);
+    }
+    .welcome h1 { font-size: 24px; color: var(--text-0); font-weight: 600; margin-bottom: 6px; letter-spacing: -0.01em; }
+    .welcome-tagline {
+      color: var(--accent-soft);
+      font-size: 13px;
+      font-style: italic;
+      margin-bottom: 10px;
+      letter-spacing: 0.01em;
+    }
+    .welcome p  { color: var(--text-3); font-size: 14px; margin-bottom: 24px; max-width: 520px; margin-left: auto; margin-right: auto; line-height: 1.55; }
+    .welcome-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: 480px; margin: 0 auto; }
+    .welcome-prompt {
+      text-align: left;
+      background: var(--surface-100);
+      border: 1px solid var(--border-muted);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: var(--text-1);
+      cursor: pointer;
+      transition: border-color 140ms, transform 140ms, background 140ms;
+    }
+    .welcome-prompt:hover { border-color: var(--surface-500); background: var(--surface-200); transform: translateY(-1px); }
+
+    /* ======================================================================
+       Overlays / modals / toasts
+    ====================================================================== */
+    /* Phase 8a (H-3) — full-pane drop overlay. Pre-fix this was a faint
+       border + emoji that didn't read on dark wallpaper. Now: darken
+       the whole pane, plus a card with subtle scale + glow. */
+    .drop-overlay {
+      position: absolute; inset: 0;
+      background: rgba(10, 10, 11, 0.78);
+      backdrop-filter: blur(2px);
+      pointer-events: none;
+      display: none;
+      align-items: center; justify-content: center;
+      z-index: 40;
+      animation: drop-overlay-in var(--dur-fast) var(--ease-out);
+    }
+    .drop-overlay.visible { display: flex; }
+    .drop-overlay-card {
+      background: var(--surface-100);
+      border: 2px dashed var(--accent);
+      border-radius: 16px;
+      padding: 28px 36px;
+      box-shadow: 0 0 0 4px rgba(203,124,88,0.18), 0 18px 50px rgba(0,0,0,0.5);
+      transform: scale(0.96);
+      animation: drop-card-in var(--dur-base) var(--ease-spring) forwards;
+      text-align: center;
+    }
+    .drop-overlay-emoji { font-size: 44px; margin-bottom: 10px; }
+    .drop-overlay-title { color: var(--accent); font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+    .drop-overlay-sub { color: var(--text-3); font-size: 12px; }
+    @keyframes drop-overlay-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes drop-card-in {
+      to { transform: scale(1.0); }
+    }
+
+    .toast {
+      position: fixed; bottom: 20px; right: 20px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      z-index: 60;
+      background: var(--surface-200);
+      border: 1px solid var(--border);
+      color: var(--text-0);
+      box-shadow: 0 12px 30px -10px rgba(0,0,0,0.6);
+      animation: slideUp 180ms ease-out;
+    }
+    .toast.error   { border-color: rgba(247,118,142,0.5); color: #f7768e; background: rgba(247,118,142,0.08); }
+    .toast.success { border-color: rgba(86,199,159,0.4); color: #56c79f; background: rgba(86,199,159,0.06); }
+
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.65);
+      backdrop-filter: blur(3px);
+      display: grid; place-items: center;
+      padding: 20px;
+      z-index: 50;
+      animation: fadeIn 150ms;
+    }
+    .modal {
+      background: var(--surface-100);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      width: 100%; max-width: 720px;
+      max-height: 80vh;
+      display: flex; flex-direction: column;
+      animation: popIn 200ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid var(--border-muted); }
+    .modal-title { color: var(--text-0); font-weight: 600; }
+    .modal-close { color: var(--text-3); background: transparent; border: none; cursor: pointer; font-size: 22px; line-height: 1; }
+    .modal-close:hover { color: var(--text-0); }
+    .modal-body { overflow-y: auto; padding: 14px 18px; }
+
+    .lightbox {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.92);
+      display: grid; place-items: center;
+      padding: 24px;
+      z-index: 70;
+      cursor: zoom-out;
+      animation: fadeIn 160ms;
+    }
+    .lightbox img { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+
+    /* Inline rename */
+    .title-edit {
+      background: var(--surface-100);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 3px 8px;
+      color: var(--text-0);
+      font: inherit;
+      outline: none;
+      width: 100%;
+    }
+
+    /* Feedback bar */
+    .feedback-bar {
+      display: flex; gap: 4px; margin-top: 8px;
+      opacity: 0; transition: opacity 180ms;
+    }
+    .turn.assistant:hover .feedback-bar,
+    .feedback-bar.visible { opacity: 1; }
+    .feedback-btn {
+      background: transparent; border: none; cursor: pointer;
+      color: var(--text-4); font-size: 14px; padding: 3px 6px; border-radius: 5px;
+      transition: color 120ms, background 120ms, transform 120ms;
+    }
+    .feedback-btn:hover { background: var(--surface-200); transform: scale(1.15); }
+    .feedback-btn.up:hover    { color: #56c79f; }
+    .feedback-btn.down:hover  { color: #f7768e; }
+    .feedback-btn.selected    { transform: scale(1.2); }
+    .feedback-btn:disabled    { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    /* Model-info inline badge */
+    .model-info-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 10.5px;
+      color: var(--text-4);
+      background: transparent;
+      margin: 4px 0 8px 0;
+      font-family: ui-monospace,Menlo,monospace;
+    }
+    .model-info-chip.mid-run { color: var(--state-thinking, #f5b84c); }
+
+    /* Context-window meter (header) */
+    .ctx-meter {
+      position: relative;
+      width: 110px; height: 18px;
+      border-radius: 6px;
+      background: var(--surface-200);
+      border: 1px solid var(--border-muted);
+      overflow: hidden;
+      display: inline-flex; align-items: center;
+      cursor: default;
+      transition: opacity 180ms;
+    }
+    .ctx-meter.hidden { display: none; }
+    .ctx-meter-fill {
+      position: absolute; inset: 0 auto 0 0;
+      width: 0%;
+      background: linear-gradient(90deg, #56c79f 0%, #56c79f 100%);
+      transition: width 280ms ease-out, background 280ms;
+    }
+    .ctx-meter.warn .ctx-meter-fill { background: linear-gradient(90deg, #f5b84c 0%, #e8a838 100%); }
+    .ctx-meter.crit .ctx-meter-fill { background: linear-gradient(90deg, #f7768e 0%, #d84855 100%); }
+    .ctx-meter-label {
+      position: relative; z-index: 1;
+      width: 100%; text-align: center;
+      font-family: ui-monospace,Menlo,monospace;
+      font-size: 10.5px;
+      color: var(--text-0);
+      letter-spacing: 0.02em;
+      text-shadow: 0 1px 1px rgba(0,0,0,0.6);
+      padding: 0 6px;
+    }
+
+    /* Orchestrator status / plan blocks */
+    .orch-status {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--surface-100);
+      border: 1px solid var(--border-muted);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 12.5px;
+      color: var(--text-2);
+      margin-bottom: 12px;
+      animation: fadeIn 180ms;
+    }
+    .orch-plan {
+      margin-bottom: 14px;
+      background: var(--surface-100);
+      border: 1px solid var(--border-muted);
+      border-radius: 10px;
+      padding: 10px 12px;
+      animation: slideUp 200ms;
+    }
+    .orch-plan-head { font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
+    .orch-plan-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); gap: 6px; }
+    .orch-plan-item { background: var(--surface-200); border: 1px solid var(--border-muted); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+    .orch-plan-item .t { color: var(--text-0); font-weight: 500; }
+    .orch-plan-item .m { color: var(--text-4); font-size: 10.5px; font-family: ui-monospace,Menlo,monospace; margin-top: 2px; }
+
+    .subtask-section {
+      margin-bottom: 16px;
+      border-left: 2px solid var(--border-muted);
+      padding-left: 12px;
+      animation: slideUp 200ms;
+    }
+    .subtask-title {
+      font-size: 12px; color: var(--accent);
+      margin-bottom: 4px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .subtask-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--state-thinking, #f5b84c); }
+    .subtask-section.done { border-left-color: var(--state-streaming, #56c79f); }
+    .subtask-section.done .subtask-dot { background: var(--state-streaming, #56c79f); box-shadow: 0 0 6px rgba(86,199,159,0.4); }
+    .subtask-mini { font-size: 10.5px; color: var(--text-4); font-family: ui-monospace,Menlo,monospace; margin: 2px 0; display: flex; align-items: center; gap: 6px; }
+    .subtask-mini .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--state-thinking, #f5b84c); }
+    .subtask-mini.done .dot { background: var(--state-streaming, #56c79f); }
+
+    /* Reconnect bubble — lives at the bottom as a fake assistant turn */
+    .reconnect-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 12px; color: var(--state-thinking, #f5b84c);
+      padding: 2px 0;
+    }
+
+    /* Hidden */
+    .hidden { display: none !important; }
+  </style>
+</head>
+
+<body>
+  <div class="app-shell">
+
+    <!-- Sidebar ============================================ -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <div style="min-width:0; flex:1;">
+          <div class="brand-name">Ares</div>
+          <div class="brand-tagline" id="brandTagline">The Orchestrator of Intelligence</div>
+          <div class="brand-model" id="modelBadge">loading…</div>
+        </div>
+      </div>
+
+      <button class="btn-newchat" id="newChatBtn" title="Start new chat (⌘N)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        New chat
+      </button>
+
+      <div class="pane-tabs">
+        <button class="pane-tab active" data-pane="sessions">Chats</button>
+        <button class="pane-tab" data-pane="mcps">MCPs</button>
+      </div>
+
+      <div id="pane-sessions" class="pane">
+        <div id="sessionList"></div>
+      </div>
+
+      <div id="pane-mcps" class="pane hidden">
+        <input id="mcpSearch" class="mcp-search" placeholder="Filter MCPs…" />
+        <div id="mcpList"></div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div id="statusBadge" class="status">booting…</div>
+        <a href="/jobs.html" class="icon-btn" title="Scheduled jobs" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;color:inherit">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </a>
+        <button class="icon-btn" id="toolsBtn" title="Show all active tools">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main ============================================ -->
+    <main class="main" id="mainPane">
+      <header class="header">
+        <div class="header-title" id="chatTitle" title="Double-click to rename">New conversation</div>
+        <div class="header-meta">
+          <div class="ctx-meter hidden" id="ctxMeter" title="Estimated context-window usage">
+            <div class="ctx-meter-fill" id="ctxMeterFill"></div>
+            <span class="ctx-meter-label" id="ctxMeterLabel"></span>
+          </div>
+          <span id="toolCount"></span>
+        </div>
+      </header>
+
+      <div class="messages" id="messages"></div>
+
+      <div class="composer-wrap">
+        <form class="composer" id="composer">
+          <div class="composer-chips" id="attachmentChips"></div>
+          <div class="composer-row">
+            <label for="fileInput" class="composer-btn" title="Attach files">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57a4 4 0 1 1 5.66 5.66l-8.58 8.58a2 2 0 1 1-2.83-2.83l8.49-8.48"/></svg>
+            </label>
+            <input id="fileInput" type="file" multiple class="hidden" />
+            <textarea id="input" rows="1" class="composer-input" placeholder="Ask Ares anything… Enter to send, Shift+Enter for new line"></textarea>
+            <button type="button" class="composer-btn" id="micBtn" title="Hold to speak">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 1 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v4"/><path d="M8 23h8"/></svg>
+            </button>
+            <select id="modelSelect" class="composer-select" title="Select model"></select>
+            <button type="button" class="composer-btn" id="modeToggle" title="Single agent · click to enable parallel">
+              <span id="modeIcon" style="font-size:13px;line-height:1;">⚡</span>
+            </button>
+            <button type="submit" class="send-btn" id="sendBtn" title="Send (⌘/Ctrl+Enter)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l7-7 7 7M12 5v14"/></svg>
+            </button>
+            <button type="button" class="send-btn stop-btn hidden" id="stopBtn" title="Stop generating">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div class="drop-overlay" id="dropOverlay">
+        <div class="drop-overlay-card">
+          <div class="drop-overlay-emoji">📎</div>
+          <div class="drop-overlay-title">Drop files to attach</div>
+          <div class="drop-overlay-sub">Images, PDFs, code, text, archives — Ares figures it out.</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Tools modal -->
+  <div class="modal-backdrop hidden" id="toolsModal">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title">Active tools</div>
+        <button class="modal-close" id="closeToolsBtn">×</button>
+      </div>
+      <div class="modal-body" id="toolsList"></div>
+    </div>
+  </div>
+
+  <!-- Image lightbox -->
+  <div class="lightbox hidden" id="imageLightbox">
+    <img id="lightboxImg" alt="" />
+  </div>
+
+  <!-- Phase 8a (H-4) — keyboard-shortcuts overlay. Toggled via ⌘/. -->
+  <div class="modal-backdrop hidden" id="shortcutsModal">
+    <div class="modal" style="max-width: 540px;">
+      <div class="modal-head">
+        <div class="modal-title">Keyboard shortcuts</div>
+        <button class="modal-close" id="closeShortcutsBtn">×</button>
+      </div>
+      <div class="modal-body" style="padding: 4px 16px 14px 16px;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <tbody>
+            <tr><td style="padding:6px 8px; color:var(--text-2)">Open shortcuts</td><td style="padding:6px 8px;"><kbd>⌘ /</kbd></td></tr>
+            <tr><td style="padding:6px 8px; color:var(--text-2)">New chat</td><td style="padding:6px 8px;"><kbd>⌘ N</kbd></td></tr>
+            <tr><td style="padding:6px 8px; color:var(--text-2)">Send message</td><td style="padding:6px 8px;"><kbd>⌘ ↩</kbd> or <kbd>↩</kbd></td></tr>
+            <tr><td style="padding:6px 8px; color:var(--text-2)">New line in composer</td><td style="padding:6px 8px;"><kbd>⇧ ↩</kbd></td></tr>
+            <tr><td style="padding:6px 8px; color:var(--text-2)">Stop / cancel</td><td style="padding:6px 8px;"><kbd>Esc</kbd></td></tr>
+            <tr><td style="padding:6px 8px; color:var(--text-2)">Close modal / lightbox</td><td style="padding:6px 8px;"><kbd>Esc</kbd></td></tr>
+            <tr><td style="padding:6px 8px; color:var(--text-2)">Slash commands</td><td style="padding:6px 8px;"><kbd>/</kbd> + name (autocomplete)</td></tr>
+            <tr><td style="padding:6px 8px; color:var(--text-2)">Open compact panel (Electron)</td><td style="padding:6px 8px;"><kbd>⌘⇧ A</kbd></td></tr>
+          </tbody>
+        </table>
+        <p style="color:var(--text-3); font-size:11.5px; margin: 14px 8px 0;">
+          On Windows / Linux, ⌘ → Ctrl. The Electron shell also exposes a tray menu
+          with Doctor, Personality, Sandbox, and Gateway entries.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast hidden" id="toast"></div>
+
+  <style>
+    /* Phase 8a — shortcuts overlay <kbd> styling. */
+    kbd {
+      background: var(--surface-200);
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 11.5px;
+      color: var(--text-0);
+    }
+  </style>
+
+  <!-- Phase 3 — bearer token + fetch wrapper.
+       The server templates __ARES_TOKEN__ on every page render. We override
+       window.fetch so every /api/* call carries Authorization: Bearer <token>
+       without each call site having to remember. SSE EventSource doesn't
+       support custom headers, but we use fetch+ReadableStream for streaming,
+       so the wrapper still applies. -->
+  <script>
+    window.__ARES_TOKEN__ = "__ARES_TOKEN__";
+    (function () {
+      // H-8: detect template-substitution failure. If the server didn't
+      // replace the placeholder, every /api/* call would silently send
+      // `Bearer __ARES_TOKEN__` literally and fail with 401. Surface it
+      // visibly instead.
+      if (window.__ARES_TOKEN__ === "__" + "ARES_TOKEN__") {
+        console.error("[ares] auth token template was not substituted; /api/* calls will 401");
+        window.__ARES_TOKEN_BAD__ = true;
+      }
+
+      // H-6: lightweight banner system for 401 (session expired) +
+      // template-substitution failure. We don't depend on app.js because
+      // app.js itself uses window.fetch — the banner has to come up
+      // before any of those calls fire.
+      function showAuthBanner(text) {
+        if (document.getElementById("__ares-auth-banner__")) return;
+        const b = document.createElement("div");
+        b.id = "__ares-auth-banner__";
+        b.style.cssText =
+          "position:fixed;top:0;left:0;right:0;z-index:9999;" +
+          "padding:10px 14px;text-align:center;background:#7d2929;color:#fff5f5;" +
+          "font:13px -apple-system,sans-serif;border-bottom:1px solid #b94545;" +
+          "box-shadow:0 2px 8px rgba(0,0,0,0.4)";
+        b.innerHTML = '';
+        const span = document.createElement("span");
+        span.textContent = text;
+        b.appendChild(span);
+        const btn = document.createElement("button");
+        btn.textContent = "Refresh";
+        btn.style.cssText =
+          "margin-left:14px;padding:4px 10px;border:1px solid #ffaeae;" +
+          "background:transparent;color:#fff5f5;border-radius:4px;cursor:pointer";
+        btn.onclick = () => location.reload();
+        b.appendChild(btn);
+        document.body.appendChild(b);
+      }
+
+      if (window.__ARES_TOKEN_BAD__) {
+        // Slight delay so the body exists.
+        document.addEventListener("DOMContentLoaded", () => showAuthBanner(
+          "Auth token missing — page template wasn't fully rendered. Reload to retry."));
+      }
+
+      const realFetch = window.fetch.bind(window);
+      window.fetch = async function (input, init) {
+        let url = typeof input === "string" ? input : (input && input.url) || "";
+        const isApi = url.startsWith("/api/") || url.startsWith(`${location.origin}/api/`);
+        if (!isApi) return realFetch(input, init);
+        const opts = init ? { ...init } : {};
+        const headers = new Headers(opts.headers || (typeof input !== "string" && input.headers) || {});
+        if (!headers.has("Authorization")) {
+          headers.set("Authorization", "Bearer " + window.__ARES_TOKEN__);
+        }
+        opts.headers = headers;
+        const res = await realFetch(input, opts);
+        // H-6: a 401 anywhere on /api/* almost always means the token
+        // rotated under us (server restart with new token, or operator
+        // manually rotated). Surface a banner once and leave the run
+        // alone — the user can refresh.
+        if (res.status === 401) {
+          showAuthBanner("Session expired — your auth token rotated. Refresh the page to continue.");
+        }
+        return res;
+      };
+    })();
+  </script>
+  <!-- Phase 7a — anim.js (slow-mo cookie reader, prefersReducedMotion helper). -->
+  <script type="module" src="/lib/anim.js?v=__BUILD__"></script>
+  <script type="module" src="/app.js?v=__BUILD__"></script>
+</body>
+</html>

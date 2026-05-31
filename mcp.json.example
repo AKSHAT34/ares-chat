@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "node",
+      "args": ["./path/to/memory-mcp/server.js"],
+      "env": {},
+      "disabled": false
+    },
+    "skills": {
+      "command": "node",
+      "args": ["./path/to/skills-mcp/server.js"],
+      "env": {},
+      "disabled": false
+    },
+    "shell-agent": {
+      "command": "node",
+      "args": ["./path/to/shell-agent/server.js"],
+      "env": {},
+      "disabled": false
+    },
+    "filesystem-agent": {
+      "command": "node",
+      "args": ["./path/to/filesystem-agent/server.js"],
+      "env": {},
+      "disabled": false
+    }
+  }
+}
